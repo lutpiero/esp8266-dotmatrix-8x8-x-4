@@ -32,6 +32,7 @@ int waktuSholat[5] = {0, 0, 0, 0, 0};
 String namaSholat[5] = {"Subuh", "Dzuhur", "Ashar", "Maghrib", "Isya"};
 char displayBuffer[150];
 int lastHourFetched = -1;
+int lastHttpError = 0; // Menyimpan kode error untuk ditampilkan
 
 // --- FUNGSI BANTUAN EEPROM ---
 void writeEEPROM(int startAdr, int maxLength, String writeString) {
@@ -58,14 +59,16 @@ String readEEPROM(int startAdr, int maxLength) {
 // --- FUNGSI WEB SERVER ---
 void handleRoot() {
   String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<style>body{font-family:sans-serif; padding:20px; background:#f4f4f4;} .card{background:#fff; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1);} input[type=text], input[type=password]{width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:4px;} button{width:100%; padding:12px; background:#28a745; color:white; border:none; border-radius:4px; font-size:16px;}</style></head>";
+  html += "<style>body{font-family:sans-serif; padding:20px; background:#f4f4f4;} .card{background:#fff; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1);} input[type=text], input[type=password]{width:100%; padding:10px; margin:8px 0; border:1px solid #ccc; border-radius:4px;} button{width:100%; padding:12px; background:#28a745; color:white; border:none; border-radius:4px; font-size:16px; margin-bottom:10px;}</style></head>";
   html += "<body><div class='card'><h2>Pengaturan NodeMCU</h2>";
   html += "<form action='/save' method='POST'>";
   html += "<label>WiFi SSID:</label><input type='text' name='ssid' value='" + userSSID + "'>";
   html += "<label>WiFi Password:</label><input type='password' name='pass'>";
   html += "<label>Nama Kota:</label><input type='text' name='city' value='" + city + "'>";
   html += "<button type='submit'>Simpan & Restart</button>";
-  html += "</form></div></body></html>";
+  html += "</form>";
+  html += "<hr><form action='/reset' method='GET'><button type='submit' style='background:#dc3545;'>Reset ke Pengaturan Pabrik</button></form>";
+  html += "</div></body></html>";
   server.send(200, "text/html", html);
 }
 
@@ -85,6 +88,18 @@ void handleSave() {
   ESP.restart(); 
 }
 
+void handleReset() {
+  writeEEPROM(0, 32, "");
+  writeEEPROM(32, 64, "");
+  writeEEPROM(96, 32, "");
+  
+  String html = "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Memori Dihapus!</h2><p>Alat sedang di-restart ke mode AP.</p></body></html>";
+  server.send(200, "text/html", html);
+  
+  delay(2000);
+  ESP.restart();
+}
+
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(512); 
@@ -98,11 +113,16 @@ void setup() {
   String savedCity = readEEPROM(96, 32);
   if (savedCity.length() > 0) city = savedCity;
 
+  // PERBAIKAN: Selalu inisialisasi route web server agar bisa diakses kapan saja
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/save", HTTP_POST, handleSave);
+  server.on("/reset", HTTP_GET, handleReset);
+
   if (userSSID.length() > 0) {
     myDisplay.print("Conn..");
     WiFi.begin(userSSID.c_str(), userPass.c_str());
     
-    int timeout = 20; 
+    int timeout = 30; // Tunggu maksimal 15 detik
     while (WiFi.status() != WL_CONNECTED && timeout > 0) {
       delay(500);
       timeout--;
@@ -116,27 +136,23 @@ void setup() {
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
     WiFi.softAP("shalat", "ABC123456");
 
-    server.on("/", HTTP_GET, handleRoot);
-    server.on("/save", HTTP_POST, handleSave);
-    server.on("/reset", HTTP_GET, handleReset);
-    server.begin();
+    server.begin(); // Mulai web server di AP Mode
     
     myDisplay.displayText("Setup WiFi: 'shalat' - IP: 192.168.2.1", PA_CENTER, 40, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
   } 
   else {
     isAPMode = false;
+    server.begin(); // Mulai web server di Station Mode (Konek Wi-Fi rumah)
     
-    // --- FITUR BARU: Menampilkan IP saat terkoneksi ---
     String ipMsg = "IP: " + WiFi.localIP().toString();
     myDisplay.displayClear();
     myDisplay.displayText(ipMsg.c_str(), PA_CENTER, 45, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
     
-    // Tahan proses lain sampai tulisan IP selesai berjalan
     while (!myDisplay.displayAnimate()) {
+      server.handleClient(); // Jaga server tetap responsif selama animasi IP
       yield(); 
     }
     myDisplay.displayReset();
-    // ----------------------------------------------------
 
     timeClient.begin();
     myDisplay.print("Sync..");
@@ -146,8 +162,9 @@ void setup() {
 }
 
 void loop() {
+  server.handleClient(); // PERBAIKAN: Halaman web terus dipantau, baik di mode AP maupun konek Wi-Fi
+  
   if (isAPMode) {
-    server.handleClient(); 
     if (myDisplay.displayAnimate()) {
       myDisplay.displayReset(); 
     }
@@ -175,16 +192,15 @@ void loop() {
   }
 }
 
-// --- FUNGSI LOGIK WAKTU SHOLAT YANG DIPERBAIKI ---
 void updateDisplayString() {
   int currentHour = timeClient.getHours();
   int currentMinute = timeClient.getMinutes();
   int currentSecond = timeClient.getSeconds();
   int currentMins = (currentHour * 60) + currentMinute;
 
-  // Jika data gagal ditarik, jam tetap tampil dengan indikator error
+  // Jika gagal, tampilkan jam beserta kode error dari server
   if (waktuSholat[0] == 0) {
-    sprintf(displayBuffer, "%02d:%02d API Err", currentHour, currentMinute);
+    sprintf(displayBuffer, "API Err: %d", lastHttpError);
     return;
   }
 
@@ -220,7 +236,6 @@ void fetchPrayerTimes() {
     WiFiClient client;
     HTTPClient http;
     
-    // Perbaikan: Ubah spasi menjadi %20 agar tidak error 400 (Misal: "Jakarta Selatan" -> "Jakarta%20Selatan")
     String safeCity = city;
     safeCity.replace(" ", "%20");
     String safeCountry = country;
@@ -230,31 +245,24 @@ void fetchPrayerTimes() {
     http.begin(client, url);
     int httpCode = http.GET();
     
-    if (httpCode > 0) {
+    if (httpCode == 200) {
       String payload = http.getString();
       waktuSholat[0] = extractTime(payload, "Fajr");
       waktuSholat[1] = extractTime(payload, "Dhuhr");
       waktuSholat[2] = extractTime(payload, "Asr");
       waktuSholat[3] = extractTime(payload, "Maghrib");
       waktuSholat[4] = extractTime(payload, "Isha");
+      lastHttpError = 200; // Sukses
+    } else {
+      // Simpan kode error (misal -1 gagal koneksi jaringan, 400 Bad Request)
+      lastHttpError = httpCode; 
     }
     http.end();
+  } else {
+    lastHttpError = -2; // Error indikator WiFi terputus
   }
 }
-void handleReset() {
-  // Kosongkan EEPROM
-  writeEEPROM(0, 32, "");
-  writeEEPROM(32, 64, "");
-  writeEEPROM(96, 32, "");
-  
-  String html = "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Alat Direset!</h2><p>NodeMCU sedang di-restart dan akan kembali ke mode 'shalat'.</p></body></html>";
-  server.send(200, "text/html", html);
-  
-  delay(2000);
-  ESP.restart();
-}
 
-// Perbaikan: Fungsi ini sekarang kebal terhadap spasi ekstra pada JSON dari server
 int extractTime(String payload, String key) {
   int keyIndex = payload.indexOf("\"" + key + "\"");
   if (keyIndex > -1) {
