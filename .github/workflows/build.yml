@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       ESP8266_PACKAGE_INDEX_URL: https://arduino.esp8266.com/stable/package_esp8266com_index.json
 
