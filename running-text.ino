@@ -2,9 +2,8 @@
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 
-// Kita coba ganti tipe hardware-nya ke GENERIC
-#define HARDWARE_TYPE MD_MAX72XX::GENERIC_HW 
-#define MAX_DEVICES 4 
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+#define MAX_DEVICES 4
 
 #define DATA_PIN 13
 #define CLK_PIN  14
@@ -14,13 +13,13 @@ MD_Parola myDisplay = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DE
 
 void setup() {
   myDisplay.begin();
-  myDisplay.setIntensity(5); // Kecerahan sedang
+  myDisplay.setIntensity(3); 
   myDisplay.displayClear();
-  
-  // Menampilkan teks diam tanpa animasi untuk uji coba
-  myDisplay.print("Halo");
+  myDisplay.displayText("Selamat Iedul Adha 1447 H", PA_CENTER, 75, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
 }
 
 void loop() {
-  // Biarkan kosong untuk tes ini
+  if (myDisplay.displayAnimate()) {
+    myDisplay.displayReset();
+  }
 }
