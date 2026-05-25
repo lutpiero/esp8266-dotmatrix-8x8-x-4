@@ -1,0 +1,41 @@
+name: build
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ESP8266_PACKAGE_INDEX_URL: https://arduino.esp8266.com/stable/package_esp8266com_index.json
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP8266 platform
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli core update-index --additional-urls "$ESP8266_PACKAGE_INDEX_URL"
+          arduino-cli core install esp8266:esp8266 --additional-urls "$ESP8266_PACKAGE_INDEX_URL"
+
+      - name: Build flashable binary
+        run: |
+          arduino-cli compile \
+            --fqbn esp8266:esp8266:nodemcuv2 \
+            --output-dir build \
+            .
+          mkdir -p artifact
+          cp build/*.bin artifact/
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: esp8266-dotmatrix-binary
+          path: artifact/*.bin
+          if-no-files-found: error
