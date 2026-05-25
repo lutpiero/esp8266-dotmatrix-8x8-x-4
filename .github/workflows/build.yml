@@ -28,7 +28,7 @@ jobs:
           arduino-cli core update-index --additional-urls "$ESP8266_PACKAGE_INDEX_URL"
           arduino-cli core install esp8266:esp8266 --additional-urls "$ESP8266_PACKAGE_INDEX_URL"
           arduino-cli lib update-index
-          arduino-cli lib install "MD_Parola" "MD_MAX72XX"
+          arduino-cli lib install "MD_Parola" "MD_MAX72XX" "NTPClient"
 
       - name: Compile each sketch independently
         shell: bash
