@@ -25,7 +25,7 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 7 * 3600);
 bool isAPMode = false;
 String userSSID = "";
 String userPass = "";
-String city = "Jakarta"; // Default kota
+String city = "Jakarta";
 String country = "Indonesia";
 
 int waktuSholat[5] = {0, 0, 0, 0, 0}; 
@@ -39,7 +39,7 @@ void writeEEPROM(int startAdr, int maxLength, String writeString) {
     if (i < writeString.length()) {
       EEPROM.write(startAdr + i, writeString[i]);
     } else {
-      EEPROM.write(startAdr + i, 0); // Null terminator
+      EEPROM.write(startAdr + i, 0); 
     }
   }
   EEPROM.commit();
@@ -74,38 +74,34 @@ void handleSave() {
   String newPass = server.arg("pass");
   String newCity = server.arg("city");
 
-  // Simpan ke EEPROM
   writeEEPROM(0, 32, newSSID);
   writeEEPROM(32, 64, newPass);
   writeEEPROM(96, 32, newCity);
 
-  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Tersimpan!</h2><p>NodeMCU sedang di-restart. Silakan hubungkan kembali perangkat Anda ke WiFi rumah.</p></body></html>";
+  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Tersimpan!</h2><p>NodeMCU sedang di-restart.</p></body></html>";
   server.send(200, "text/html", html);
 
   delay(2000);
-  ESP.restart(); // Restart perangkat untuk terhubung ke WiFi baru
+  ESP.restart(); 
 }
 
 void setup() {
   Serial.begin(115200);
-  EEPROM.begin(512); // Alokasi 512 bytes untuk EEPROM
+  EEPROM.begin(512); 
   
   myDisplay.begin();
   myDisplay.setIntensity(3);
   myDisplay.displayClear();
 
-  // 1. Baca Data dari EEPROM
   userSSID = readEEPROM(0, 32);
   userPass = readEEPROM(32, 64);
   String savedCity = readEEPROM(96, 32);
   if (savedCity.length() > 0) city = savedCity;
 
-  // 2. Coba Hubungkan ke WiFi jika ada SSID tersimpan
   if (userSSID.length() > 0) {
     myDisplay.print("Conn..");
     WiFi.begin(userSSID.c_str(), userPass.c_str());
     
-    // Tunggu maksimal 10 detik (20 * 500ms)
     int timeout = 20; 
     while (WiFi.status() != WL_CONNECTED && timeout > 0) {
       delay(500);
@@ -113,44 +109,49 @@ void setup() {
     }
   }
 
-  // 3. Jika Gagal atau Kosong, Nyalakan Mode AP (Access Point)
   if (WiFi.status() != WL_CONNECTED) {
     isAPMode = true;
     WiFi.mode(WIFI_AP);
-    
-    // Atur Custom IP: 192.168.2.1
     IPAddress apIP(192, 168, 2, 1);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
     WiFi.softAP("shalat", "ABC123456");
 
-    // Jalankan Web Server
     server.on("/", HTTP_GET, handleRoot);
     server.on("/save", HTTP_POST, handleSave);
+    server.on("/reset", HTTP_GET, handleReset);
     server.begin();
     
-    // Teks instruksi di Matrix
-    myDisplay.displayText("Setup WiFi: 'shalat' - IP: 192.168.2.1", PA_CENTER, 50, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+    myDisplay.displayText("Setup WiFi: 'shalat' - IP: 192.168.2.1", PA_CENTER, 40, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
   } 
-  // 4. Jika Berhasil Konek WiFi, Jalankan Fungsi Utama
   else {
     isAPMode = false;
+    
+    // --- FITUR BARU: Menampilkan IP saat terkoneksi ---
+    String ipMsg = "IP: " + WiFi.localIP().toString();
+    myDisplay.displayClear();
+    myDisplay.displayText(ipMsg.c_str(), PA_CENTER, 45, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+    
+    // Tahan proses lain sampai tulisan IP selesai berjalan
+    while (!myDisplay.displayAnimate()) {
+      yield(); 
+    }
+    myDisplay.displayReset();
+    // ----------------------------------------------------
+
     timeClient.begin();
     myDisplay.print("Sync..");
     timeClient.update();
-    myDisplay.print("API..");
     fetchPrayerTimes();
   }
 }
 
 void loop() {
-  // === JIKA DALAM MODE PENGATURAN (AP) ===
   if (isAPMode) {
-    server.handleClient(); // Dengarkan request HTTP
+    server.handleClient(); 
     if (myDisplay.displayAnimate()) {
-      myDisplay.displayReset(); // Terus gulirkan teks instruksi IP
+      myDisplay.displayReset(); 
     }
   } 
-  // === JIKA DALAM MODE NORMAL (SUDAH KONEK WIFI) ===
   else {
     timeClient.update();
 
@@ -174,15 +175,16 @@ void loop() {
   }
 }
 
-// --- FUNGSI LOGIK WAKTU SHOLAT (Sama seperti sebelumnya) ---
+// --- FUNGSI LOGIK WAKTU SHOLAT YANG DIPERBAIKI ---
 void updateDisplayString() {
   int currentHour = timeClient.getHours();
   int currentMinute = timeClient.getMinutes();
   int currentSecond = timeClient.getSeconds();
   int currentMins = (currentHour * 60) + currentMinute;
 
+  // Jika data gagal ditarik, jam tetap tampil dengan indikator error
   if (waktuSholat[0] == 0) {
-    sprintf(displayBuffer, "Menunggu Data...");
+    sprintf(displayBuffer, "%02d:%02d API Err", currentHour, currentMinute);
     return;
   }
 
@@ -217,9 +219,17 @@ void fetchPrayerTimes() {
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     HTTPClient http;
-    String url = "http://api.aladhan.com/v1/timingsByCity?city=" + city + "&country=" + country + "&method=20";
+    
+    // Perbaikan: Ubah spasi menjadi %20 agar tidak error 400 (Misal: "Jakarta Selatan" -> "Jakarta%20Selatan")
+    String safeCity = city;
+    safeCity.replace(" ", "%20");
+    String safeCountry = country;
+    safeCountry.replace(" ", "%20");
+    
+    String url = "http://api.aladhan.com/v1/timingsByCity?city=" + safeCity + "&country=" + safeCountry + "&method=20";
     http.begin(client, url);
     int httpCode = http.GET();
+    
     if (httpCode > 0) {
       String payload = http.getString();
       waktuSholat[0] = extractTime(payload, "Fajr");
@@ -231,16 +241,33 @@ void fetchPrayerTimes() {
     http.end();
   }
 }
+void handleReset() {
+  // Kosongkan EEPROM
+  writeEEPROM(0, 32, "");
+  writeEEPROM(32, 64, "");
+  writeEEPROM(96, 32, "");
+  
+  String html = "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Alat Direset!</h2><p>NodeMCU sedang di-restart dan akan kembali ke mode 'shalat'.</p></body></html>";
+  server.send(200, "text/html", html);
+  
+  delay(2000);
+  ESP.restart();
+}
 
+// Perbaikan: Fungsi ini sekarang kebal terhadap spasi ekstra pada JSON dari server
 int extractTime(String payload, String key) {
-  String searchKey = "\"" + key + "\":\"";
-  int index = payload.indexOf(searchKey);
-  if (index > -1) {
-    int timeIndex = index + searchKey.length();
-    String timeStr = payload.substring(timeIndex, timeIndex + 5); 
-    int h = timeStr.substring(0, 2).toInt();
-    int m = timeStr.substring(3, 5).toInt();
-    return (h * 60) + m;
+  int keyIndex = payload.indexOf("\"" + key + "\"");
+  if (keyIndex > -1) {
+    int colonIndex = payload.indexOf(":", keyIndex);
+    if (colonIndex > -1) {
+      int startQuote = payload.indexOf("\"", colonIndex);
+      if (startQuote > -1) {
+        String timeStr = payload.substring(startQuote + 1, startQuote + 6); 
+        int h = timeStr.substring(0, 2).toInt();
+        int m = timeStr.substring(3, 5).toInt();
+        return (h * 60) + m;
+      }
+    }
   }
   return 0;
 }
