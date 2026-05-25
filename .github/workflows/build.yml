@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  pull_request:
 
 jobs:
   build:
@@ -12,6 +13,7 @@ jobs:
       contents: read
     env:
       ESP8266_PACKAGE_INDEX_URL: https://arduino.esp8266.com/stable/package_esp8266com_index.json
+      FQBN: esp8266:esp8266:nodemcuv2
 
     steps:
       - name: Check out repository
@@ -20,24 +22,40 @@ jobs:
       - name: Set up Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Install ESP8266 platform
+      - name: Install ESP8266 platform and libraries
         run: |
           arduino-cli config init --overwrite
           arduino-cli core update-index --additional-urls "$ESP8266_PACKAGE_INDEX_URL"
           arduino-cli core install esp8266:esp8266 --additional-urls "$ESP8266_PACKAGE_INDEX_URL"
+          arduino-cli lib update-index
+          arduino-cli lib install "MD_Parola" "MD_MAX72XX"
 
-      - name: Build flashable binary
+      - name: Compile each sketch independently
+        shell: bash
         run: |
-          arduino-cli compile \
-            --fqbn esp8266:esp8266:nodemcuv2 \
-            --output-dir build \
-            .
-          mkdir -p artifact
-          cp build/*.bin artifact/
+          set -euo pipefail
 
-      - name: Upload binary artifact
+          mkdir -p .ci/sketches build artifact
+
+          find . -maxdepth 1 -name "*.ino" -print0 | while IFS= read -r -d '' sketch; do
+            sketch_name="$(basename "$sketch" .ino)"
+            sketch_dir=".ci/sketches/$sketch_name"
+            output_dir="build/$sketch_name"
+
+            mkdir -p "$sketch_dir" "$output_dir"
+            cp "$sketch" "$sketch_dir/$sketch_name.ino"
+
+            arduino-cli compile \
+              --fqbn "$FQBN" \
+              --output-dir "$output_dir" \
+              "$sketch_dir"
+          done
+
+          find build -type f \( -name "*.bin" -o -name "*.elf" -o -name "*.map" \) -exec cp {} artifact/ \;
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: esp8266-dotmatrix-binary
-          path: artifact/*.bin
+          name: esp8266-build-artifacts
+          path: artifact/*
           if-no-files-found: error
