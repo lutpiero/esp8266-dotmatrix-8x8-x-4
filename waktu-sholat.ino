@@ -34,7 +34,23 @@ String namaSholat[5] = {"Subuh", "Dzuhur", "Ashar", "Maghrib", "Isya"};
 char displayBuffer[150];
 int lastHourFetched = -1;
 int lastHttpError = 0; // Menyimpan kode error untuk ditampilkan
-
+// --- CUSTOM FONT KHUSUS JAM (Lebar 3 Pixel) ---
+const uint8_t fontKecil[] PROGMEM = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 0-31 (Kosong)
+  1, 0x00, // 32 (Spasi)
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 33-47 (Kosong)
+  3, 0x3E, 0x22, 0x3E, // 48 '0'
+  3, 0x24, 0x3E, 0x20, // 49 '1'
+  3, 0x3A, 0x2A, 0x2E, // 50 '2'
+  3, 0x2A, 0x2A, 0x3E, // 51 '3'
+  3, 0x0E, 0x08, 0x3E, // 52 '4'
+  3, 0x2E, 0x2A, 0x3A, // 53 '5'
+  3, 0x3E, 0x2A, 0x3A, // 54 '6'
+  3, 0x02, 0x02, 0x3E, // 55 '7'
+  3, 0x3E, 0x2A, 0x3E, // 56 '8'
+  3, 0x2E, 0x2A, 0x3E, // 57 '9'
+  1, 0x14  // 58 ':' (Titik Dua)
+};
 // --- FUNGSI BANTUAN EEPROM ---
 void writeEEPROM(int startAdr, int maxLength, String writeString) {
   for (int i = 0; i < maxLength; i++) {
@@ -199,8 +215,9 @@ void updateDisplayString() {
   int currentSecond = timeClient.getSeconds();
   int currentMins = (currentHour * 60) + currentMinute;
 
-  // Jika gagal, tampilkan jam beserta kode error dari server
+  // Jika API gagal, kembalikan ke font normal dan tampilkan error
   if (waktuSholat[0] == 0) {
+    myDisplay.setFont(nullptr); 
     sprintf(displayBuffer, "API Err: %d", lastHttpError);
     return;
   }
@@ -216,6 +233,10 @@ void updateDisplayString() {
 
   if (nextPrayerIndex != -1) {
     int diff = waktuSholat[nextPrayerIndex] - currentMins;
+    
+    // --- MODE ADZAN/PERINGATAN: Gunakan Font Normal ---
+    myDisplay.setFont(nullptr); 
+
     if (diff == 0) {
       sprintf(displayBuffer, "Waktu Sholat %s", namaSholat[nextPrayerIndex].c_str());
     } else {
@@ -228,7 +249,15 @@ void updateDisplayString() {
       sprintf(displayBuffer, "Waktu Sholat %s %d m %d s lagi", namaSholat[nextPrayerIndex].c_str(), menitSisa, detikSisa);
     }
   } else {
-    sprintf(displayBuffer, "%02d:%02d:%02d", currentHour, currentMinute, currentSecond);
+    // --- MODE JAM DIGITAL: Gunakan Font Kecil ---
+    myDisplay.setFont(fontKecil); 
+    
+    // Tampilkan format HH:MM:SS lengkap dengan efek titik dua berkedip
+    if (currentSecond % 2 == 0) {
+      sprintf(displayBuffer, "%02d:%02d:%02d", currentHour, currentMinute, currentSecond);
+    } else {
+      sprintf(displayBuffer, "%02d %02d %02d", currentHour, currentMinute, currentSecond);
+    }
   }
 }
 
