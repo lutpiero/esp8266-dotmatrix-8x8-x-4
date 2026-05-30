@@ -1,14 +1,12 @@
-#include <WiFiClientSecure.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
+#include <WiFiClientSecure.h>
 #include <MD_Parola.h>
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 #include <EEPROM.h>
+#include <time.h> // Library waktu bawaan OS ESP8266 (Tidak butuh NTPClient lagi)
 
 // --- KONFIGURASI MATRIX ---
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
@@ -18,10 +16,25 @@
 #define CS_PIN   15 
 MD_Parola myDisplay = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
+// --- CUSTOM FONT KHUSUS JAM (Lebar 3 Pixel) ---
+const uint8_t fontKecil[] PROGMEM = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 
+  1, 0x00, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 
+  3, 0x3E, 0x22, 0x3E, // 0
+  3, 0x24, 0x3E, 0x20, // 1
+  3, 0x3A, 0x2A, 0x2E, // 2
+  3, 0x2A, 0x2A, 0x3E, // 3
+  3, 0x0E, 0x08, 0x3E, // 4
+  3, 0x2E, 0x2A, 0x3A, // 5
+  3, 0x3E, 0x2A, 0x3A, // 6
+  3, 0x02, 0x02, 0x3E, // 7
+  3, 0x3E, 0x2A, 0x3E, // 8
+  3, 0x2E, 0x2A, 0x3E, // 9
+  1, 0x14  // :
+};
+
 // --- GLOBAL VARIABLES ---
 ESP8266WebServer server(80);
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 7 * 3600); 
 
 bool isAPMode = false;
 String userSSID = "";
@@ -33,24 +46,8 @@ int waktuSholat[5] = {0, 0, 0, 0, 0};
 String namaSholat[5] = {"Subuh", "Dzuhur", "Ashar", "Maghrib", "Isya"};
 char displayBuffer[150];
 int lastHourFetched = -1;
-int lastHttpError = 0; // Menyimpan kode error untuk ditampilkan
-// --- CUSTOM FONT KHUSUS JAM (Lebar 3 Pixel) ---
-const uint8_t fontKecil[] PROGMEM = {
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 0-31 (Kosong)
-  1, 0x00, // 32 (Spasi)
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 33-47 (Kosong)
-  3, 0x3E, 0x22, 0x3E, // 48 '0'
-  3, 0x24, 0x3E, 0x20, // 49 '1'
-  3, 0x3A, 0x2A, 0x2E, // 50 '2'
-  3, 0x2A, 0x2A, 0x3E, // 51 '3'
-  3, 0x0E, 0x08, 0x3E, // 52 '4'
-  3, 0x2E, 0x2A, 0x3A, // 53 '5'
-  3, 0x3E, 0x2A, 0x3A, // 54 '6'
-  3, 0x02, 0x02, 0x3E, // 55 '7'
-  3, 0x3E, 0x2A, 0x3E, // 56 '8'
-  3, 0x2E, 0x2A, 0x3E, // 57 '9'
-  1, 0x14  // 58 ':' (Titik Dua)
-};
+int lastHttpError = 0; 
+
 // --- FUNGSI BANTUAN EEPROM ---
 void writeEEPROM(int startAdr, int maxLength, String writeString) {
   for (int i = 0; i < maxLength; i++) {
@@ -98,9 +95,8 @@ void handleSave() {
   writeEEPROM(32, 64, newPass);
   writeEEPROM(96, 32, newCity);
 
-  String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Tersimpan!</h2><p>NodeMCU sedang di-restart.</p></body></html>";
+  String html = "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Tersimpan!</h2><p>NodeMCU sedang di-restart.</p></body></html>";
   server.send(200, "text/html", html);
-
   delay(2000);
   ESP.restart(); 
 }
@@ -110,9 +106,8 @@ void handleReset() {
   writeEEPROM(32, 64, "");
   writeEEPROM(96, 32, "");
   
-  String html = "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Memori Dihapus!</h2><p>Alat sedang di-restart ke mode AP.</p></body></html>";
+  String html = "<!DOCTYPE html><html><body style='font-family:sans-serif; text-align:center; padding:50px;'><h2>Memori Dihapus!</h2><p>Alat di-restart ke mode 'shalat'.</p></body></html>";
   server.send(200, "text/html", html);
-  
   delay(2000);
   ESP.restart();
 }
@@ -130,7 +125,6 @@ void setup() {
   String savedCity = readEEPROM(96, 32);
   if (savedCity.length() > 0) city = savedCity;
 
-  // PERBAIKAN: Selalu inisialisasi route web server agar bisa diakses kapan saja
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/reset", HTTP_GET, handleReset);
@@ -139,7 +133,7 @@ void setup() {
     myDisplay.print("Conn..");
     WiFi.begin(userSSID.c_str(), userPass.c_str());
     
-    int timeout = 30; // Tunggu maksimal 15 detik
+    int timeout = 30; 
     while (WiFi.status() != WL_CONNECTED && timeout > 0) {
       delay(500);
       timeout--;
@@ -153,33 +147,43 @@ void setup() {
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
     WiFi.softAP("shalat", "ABC123456");
 
-    server.begin(); // Mulai web server di AP Mode
-    
+    server.begin(); 
     myDisplay.displayText("Setup WiFi: 'shalat' - IP: 192.168.2.1", PA_CENTER, 40, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
   } 
   else {
     isAPMode = false;
-    server.begin(); // Mulai web server di Station Mode (Konek Wi-Fi rumah)
+    server.begin(); 
     
     String ipMsg = "IP: " + WiFi.localIP().toString();
     myDisplay.displayClear();
     myDisplay.displayText(ipMsg.c_str(), PA_CENTER, 45, 0, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
     
     while (!myDisplay.displayAnimate()) {
-      server.handleClient(); // Jaga server tetap responsif selama animasi IP
+      server.handleClient(); 
       yield(); 
     }
     myDisplay.displayReset();
 
-    timeClient.begin();
+    // --- SETUP NATIVE TIME OS ---
     myDisplay.print("Sync..");
-    timeClient.update();
+    // Set zona waktu ke WIB (GMT+7 = 7 * 3600 detik) menggunakan 2 server backup
+    configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com"); 
+
+    // Tunggu maksimal 10 detik agar sistem mensinkronisasi jam 
+    time_t now = time(nullptr);
+    int retries = 0;
+    while (now < 100000 && retries < 20) {
+      delay(500);
+      now = time(nullptr);
+      retries++;
+    }
+
     fetchPrayerTimes();
   }
 }
 
 void loop() {
-  server.handleClient(); // PERBAIKAN: Halaman web terus dipantau, baik di mode AP maupun konek Wi-Fi
+  server.handleClient(); 
   
   if (isAPMode) {
     if (myDisplay.displayAnimate()) {
@@ -187,10 +191,13 @@ void loop() {
     }
   } 
   else {
-    timeClient.update();
+    // Ambil waktu dari OS secara realtime
+    time_t now = time(nullptr);
+    struct tm* timeinfo = localtime(&now);
+    int currentHour = timeinfo->tm_hour;
 
     if (myDisplay.displayAnimate()) {
-      updateDisplayString();
+      updateDisplayString(timeinfo);
       if (strlen(displayBuffer) <= 8) { 
         myDisplay.displayText(displayBuffer, PA_CENTER, 0, 500, PA_PRINT, PA_NO_EFFECT);
       } else {
@@ -199,23 +206,24 @@ void loop() {
       myDisplay.displayReset();
     }
     
-    if (timeClient.getHours() == 1 && lastHourFetched != 1) {
+    // Tarik API setiap jam 1 pagi
+    if (currentHour == 1 && lastHourFetched != 1) {
       fetchPrayerTimes();
       lastHourFetched = 1;
     }
-    if (timeClient.getHours() == 2) { 
+    // Reset status tarikan di jam 2 pagi
+    if (currentHour == 2) { 
       lastHourFetched = -1;
     }
   }
 }
 
-void updateDisplayString() {
-  int currentHour = timeClient.getHours();
-  int currentMinute = timeClient.getMinutes();
-  int currentSecond = timeClient.getSeconds();
+void updateDisplayString(struct tm* timeinfo) {
+  int currentHour = timeinfo->tm_hour;
+  int currentMinute = timeinfo->tm_min;
+  int currentSecond = timeinfo->tm_sec;
   int currentMins = (currentHour * 60) + currentMinute;
 
-  // Jika API gagal, kembalikan ke font normal dan tampilkan error
   if (waktuSholat[0] == 0) {
     myDisplay.setFont(nullptr); 
     sprintf(displayBuffer, "API Err: %d", lastHttpError);
@@ -233,8 +241,6 @@ void updateDisplayString() {
 
   if (nextPrayerIndex != -1) {
     int diff = waktuSholat[nextPrayerIndex] - currentMins;
-    
-    // --- MODE ADZAN/PERINGATAN: Gunakan Font Normal ---
     myDisplay.setFont(nullptr); 
 
     if (diff == 0) {
@@ -249,10 +255,8 @@ void updateDisplayString() {
       sprintf(displayBuffer, "Waktu Sholat %s %d m %d s lagi", namaSholat[nextPrayerIndex].c_str(), menitSisa, detikSisa);
     }
   } else {
-    // --- MODE JAM DIGITAL: Gunakan Font Kecil ---
+    // Mode Jam Digital Font Kecil (Titik dua berkedip)
     myDisplay.setFont(fontKecil); 
-    
-    // Tampilkan format HH:MM:SS lengkap dengan efek titik dua berkedip
     if (currentSecond % 2 == 0) {
       sprintf(displayBuffer, "%02d:%02d:%02d", currentHour, currentMinute, currentSecond);
     } else {
@@ -263,19 +267,17 @@ void updateDisplayString() {
 
 void fetchPrayerTimes() {
   if (WiFi.status() == WL_CONNECTED) {
-    // Menggunakan Client Secure agar kebal terhadap paksaan HTTPS dari server API
     WiFiClientSecure client;
-    client.setInsecure(); // Abaikan validasi sertifikat SSL agar hemat memori
+    client.setInsecure(); 
     
     HTTPClient http;
-    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Otomatis ikuti jika server pindah jalur
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); 
     
     String safeCity = city;
     safeCity.replace(" ", "%20");
     String safeCountry = country;
     safeCountry.replace(" ", "%20");
     
-    // Gunakan https:// untuk memastikan koneksi tidak ditolak oleh server modern
     String url = "https://api.aladhan.com/v1/timingsByCity?city=" + safeCity + "&country=" + safeCountry + "&method=20";
     
     http.begin(client, url);
@@ -290,12 +292,11 @@ void fetchPrayerTimes() {
       waktuSholat[4] = extractTime(payload, "Isha");
       lastHttpError = 200; 
     } else {
-      // Jika masih error, simpan kode error-nya agar tampil di layar
       lastHttpError = httpCode; 
     }
     http.end();
   } else {
-    lastHttpError = -2; // Indikator WiFi terputus
+    lastHttpError = -2; 
   }
 }
 
